@@ -1,0 +1,32 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-weather-api
+  namespace: code-runner-env
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: mcp-code-executor
+  policyTypes:
+    - Egress
+  egress:
+    # Allow DNS resolution so the pod can look up api.met.no
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+      to:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+    # Allow HTTPS egress.
+    # To lock it down further, you can replace 0.0.0.0/0 with the specific resolved IPBlock of api.met.no,
+    # though DNS-based egress filtering natively requires an egress gateway or Layer 7 proxy like Cilium/Istio.
+    - ports:
+        - protocol: TCP
+          port: 443
+      to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
