@@ -67,6 +67,7 @@ jobs:
       - name: Create / update Docker registry secret
         run: |
           kubectl create secret docker-registry ghsec \
+            --namespace=code-runner-env \
             --docker-server=docker.io \
             --docker-username=pregmatch \
             --docker-password="${{ secrets.DOCKER_PASSWORD }}" \
@@ -80,5 +81,4 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           # Injects $IMAGE_TAG directly into your kubernetes manifest deployment file
-          kubectl apply -f service-account.yaml || true
           envsubst < deploy-api.yaml | kubectl apply -f -
