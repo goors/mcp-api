@@ -6,8 +6,9 @@ from mcp.server.fastmcp import FastMCP
 import requests
 mcp = FastMCP("Elasticsearch Address Processor",
               transport_security=TransportSecuritySettings(
-                  allowed_hosts=["mcp.api.intovoid.dev", "localhost", "127.0.0.1"]
-              ))
+                  enable_dns_rebinding_protection=False
+              )
+            )
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 import os
