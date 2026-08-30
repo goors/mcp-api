@@ -90,7 +90,7 @@ class LocalDevAgent:
 
                 # 2. Spin up fresh custom server session for this turn
                 custom_read, custom_write, _ = await stack.enter_async_context(
-                    streamable_http_client("https://mcp.api.intovoid.dev/api/mcp")
+                    streamable_http_client("https://mcp.api.intovoid.dev/mcp/sse")
                 )
                 custom_session = await stack.enter_async_context(ClientSession(custom_read, custom_write))
                 await custom_session.initialize()
