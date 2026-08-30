@@ -1,8 +1,24 @@
 import datetime
 import subprocess
+import time
+import uuid
+
 from mcp.server.fastmcp import FastMCP
 import requests
 mcp = FastMCP("Elasticsearch Address Processor")
+from kubernetes import client, config
+from kubernetes.client.rest import ApiException
+import os
+
+
+# Initialize Kubernetes configuration from environment variables, kubeconfig, or in-cluster service account
+try:
+    if os.getenv("KUBERNETES_SERVICE_HOST"):
+        config.load_incluster_config()
+    else:
+        config.load_kube_config()
+except Exception:
+    pass  # Fallback handled or caught during tool execution
 
 @mcp.tool()
 def about_author() -> dict:
@@ -71,36 +87,125 @@ def count_tokens(text: str) -> dict:
 
 @mcp.tool()
 def run_docker_code(code: str, language: str = "node") -> dict:
-    """Executes code inside an ephemeral Docker container and returns stdout/stderr."""
-    try:
-        # Ignore whatever bloated image string the model passes and enforce a local lightweight tag
-        image = "node:current-alpine" if language.lower() in ["node", "js", "javascript"] else "python:3-alpine"
+    """Executes code inside a hardened, sandboxed Kubernetes Pod and returns stdout/stderr."""
+    pod_name = None
+    namespace = os.getenv("KUBERNETES_NAMESPACE", "code-runner-env")
 
+    try:
         if language.lower() in ["node", "js", "javascript"]:
-            command = ["docker", "run", "--rm", "-i", image, "node", "-e", code]
+            image = "node:current-alpine"
+            command = ["node", "-e", code]
         elif language.lower() in ["python", "py"]:
-            command = ["docker", "run", "--rm", "-i", image, "python3", "-c", code]
+            image = "python:3-alpine"
+            command = ["python3", "-c", code]
         else:
             return {"error": f"Unsupported execution language: {language}"}
 
-        print(command)
-        result = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=15
+        v1 = client.CoreV1Api()
+        pod_name = f"mcp-exec-{uuid.uuid4().hex[:8]}"
+
+        pod_manifest = client.V1Pod(
+            metadata=client.V1ObjectMeta(
+                name=pod_name,
+                namespace=namespace,
+                labels={"app.kubernetes.io/managed-by": "mcp-code-executor"}
+            ),
+            spec=client.V1PodSpec(
+                # Use a sandboxed runtime (like gVisor) if available in your cluster
+                # to isolate the kernel from untrusted user code.
+                runtime_class_name="gvisor",
+                service_account_name="restricted-app-sa",
+                automount_service_account_token=False,
+                restart_policy="Never",
+                containers=[
+                    client.V1Container(
+                        name="code-runner",
+                        image=image,
+                        command=command,
+                        resources=client.V1ResourceRequirements(
+                            limits={"cpu": "200m", "memory": "256Mi", "ephemeral-storage": "64Mi"},
+                            requests={"cpu": "50m", "memory": "64Mi", "ephemeral-storage": "16Mi"}
+                        ),
+                        security_context=client.V1SecurityContext(
+                            allow_privilege_escalation=False,
+                            run_as_non_root=True,
+                            run_as_user=1000,
+                            read_only_root_filesystem=True,
+                            # Enforce a default secure seccomp profile
+                            seccomp_profile=client.V1SeccompProfile(type="RuntimeDefault"),
+                            capabilities=client.V1Capabilities(
+                                drop=["ALL"]
+                            )
+                        )
+                    )
+                ]
+            )
         )
 
+        v1.create_namespaced_pod(namespace=namespace, body=pod_manifest)
+
+        timeout = 60
+        start_time = time.time()
+        pod_status = None
+
+        while True:
+            pod_status = v1.read_namespaced_pod_status(name=pod_name, namespace=namespace)
+            phase = pod_status.status.phase
+
+            if phase in ["Succeeded", "Failed"]:
+                break
+
+            if time.time() - start_time > timeout:
+                try:
+                    v1.delete_namespaced_pod(
+                        name=pod_name,
+                        namespace=namespace,
+                        body=client.V1DeleteOptions(grace_period_seconds=0)
+                    )
+                except Exception:
+                    pass
+                return {"error": "Execution timed out after 15 seconds."}
+
+            time.sleep(0.5)
+
+        logs = v1.read_namespaced_pod_log(
+            name=pod_name,
+            namespace=namespace,
+            container="code-runner"
+        )
+
+        exit_code = 0
+        container_statuses = pod_status.status.container_statuses
+        if container_statuses:
+            state = container_statuses[0].state
+            if state.terminated:
+                exit_code = state.terminated.exit_code
+
         return {
-            "exit_code": result.returncode,
-            "stdout": result.stdout.strip(),
-            "stderr": result.stderr.strip()
+            "exit_code": exit_code,
+            "stdout": logs.strip(),
+            "stderr": ""
         }
-    except subprocess.TimeoutExpired:
-        return {"error": "Execution timed out after 15 seconds."}
+
+    except ApiException as e:
+        return {
+            "error": f"Kubernetes API error: {e.reason} ({e.status})",
+            "body": e.body,
+            "host": client.Configuration.get_default_copy().host
+        }
     except Exception as e:
         return {"error": str(e)}
+    finally:
+        if pod_name:
+            try:
+                v1 = client.CoreV1Api()
+                v1.delete_namespaced_pod(
+                    name=pod_name,
+                    namespace=namespace,
+                    body=client.V1DeleteOptions(grace_period_seconds=0)
+                )
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     mcp.run()

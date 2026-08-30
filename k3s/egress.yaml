@@ -1,0 +1,12 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: isolate-code-runner
+  namespace: code-runner-env
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: mcp-code-executor
+  policyTypes:
+    - Egress
+  egress: [] # Empty list means zero outgoing network access allowed

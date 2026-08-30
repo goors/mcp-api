@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: code-executor-quota
+  namespace: code-runner-env
+spec:
+  hard:
+    pods: "10"             # Absolute max concurrent runner pods allowed alive at once
+    requests.cpu: "2"      # Total CPU request ceiling for the namespace
+    requests.memory: "2Gi" # Total RAM request ceiling for the namespace
+    limits.cpu: "4"        # Total CPU limit ceiling
+    limits.memory: "4Gi"   # Total RAM limit ceiling
