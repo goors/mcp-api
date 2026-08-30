@@ -1,11 +1,13 @@
 import datetime
-import subprocess
 import time
 import uuid
-
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.server.fastmcp import FastMCP
 import requests
-mcp = FastMCP("Elasticsearch Address Processor")
+mcp = FastMCP("Elasticsearch Address Processor",
+              transport_security=TransportSecuritySettings(
+                  allowed_hosts=["mcp.api.intovoid.dev", "localhost", "127.0.0.1"]
+              ))
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
 import os
