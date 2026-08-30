@@ -196,6 +196,7 @@ def run_docker_code(code: str, language: str = "node") -> dict:
     except Exception as e:
         return {"error": str(e)}
     finally:
+        pass
         if pod_name:
             try:
                 v1 = client.CoreV1Api()
