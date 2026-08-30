@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: mcp-api
+  namespace: code-runner-env
   labels:
     app: mcp-api
     component: api
@@ -51,6 +52,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: mcp-api-service
+  namespace: code-runner-env
 spec:
   selector:
     app: mcp-api
@@ -59,13 +61,13 @@ spec:
     - protocol: TCP
       port: 8000
       targetPort: 8000
-
 ---
 # 3. API INGRESS
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: yt-api
+  name: mcp-api
+  namespace: code-runner-env
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
