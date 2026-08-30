@@ -1,0 +1,84 @@
+name: Release api
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - v*
+  pull_request:
+
+env:
+  IMAGE_NAME: mcp-api
+  BRANCH_NAME: main
+  REPO_NAME: shiny-flake
+  APP_NAME: mcp-api
+  PORT: 9592
+
+jobs:
+
+  build_and_push:
+    name: Build and push Docker images
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Log into Docker Hub
+        run: docker login -u pregmatch -p ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build main image
+        run: |
+          docker build -f Dockerfile -t $IMAGE_NAME-$BRANCH_NAME .
+
+      - name: Push main image
+        run: |
+          docker tag $IMAGE_NAME-$BRANCH_NAME pregmatch/$REPO_NAME:$IMAGE_NAME-${{ github.sha }}
+          docker push pregmatch/$REPO_NAME:$IMAGE_NAME-${{ github.sha }}
+
+  deploy:
+    name: Deploy to Kubernetes
+    runs-on: ubuntu-latest
+    needs: build_and_push
+
+    steps:
+      - uses: actions/checkout@v3
+
+      # Install kubectl
+      - name: Install kubectl
+        run: |
+          curl -LO https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      # 4️⃣ Verify connectivity (this MUST work)
+      - name: Verify cluster access
+        run: |
+          echo "Kubeconfig server:"
+          kubectl get nodes
+
+      # Docker registry secret
+      - name: Create / update Docker registry secret
+        run: |
+          kubectl create secret docker-registry ghsec \
+            --docker-server=docker.io \
+            --docker-username=pregmatch \
+            --docker-password="${{ secrets.DOCKER_PASSWORD }}" \
+            --docker-email=nikola@pregmatch.org \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # Deploy Redis
+
+      - name: Deploy API
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Injects $IMAGE_TAG directly into your kubernetes manifest deployment file
+          kubectl apply -f service-account.yaml || true
+          envsubst < deploy-api.yaml | kubectl apply -f -

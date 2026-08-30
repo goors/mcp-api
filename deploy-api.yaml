@@ -1,0 +1,86 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-api
+  labels:
+    app: mcp-api
+    component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: mcp-api
+      component: api
+  template:
+    metadata:
+      labels:
+        app: mcp-api
+        component: api
+        type: gpu
+    spec:
+      serviceAccountName: restricted-app-sa
+      nodeSelector:
+        workload: "ai"
+      imagePullSecrets:
+        - name: ghsec
+      containers:
+        - name: app
+          image: "pregmatch/shiny-flake:mcp-api-${IMAGE_TAG}"
+          ports:
+            - containerPort: 8000
+          env:
+            - name: NVIDIA_VISIBLE_DEVICES
+              value: "all"
+            - name: NVIDIA_DRIVER_CAPABILITIES
+              value: "compute,utility"
+            - name: HF_HOME
+              value: "/app/hub"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: include_in_schema
+              value: "False"
+---
+# 2. API SERVICE
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-api-service
+spec:
+  selector:
+    app: mcp-api # Matches Deployment Labels
+    component: api
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+
+---
+# 3. API INGRESS
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: yt-api
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/buffering: "false"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - mcp.api.intovoid.dev
+      secretName: mcp-api-intovoid-dev-tls
+  rules:
+    - host: mcp.api.intovoid.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-api-service
+                port:
+                  number: 8000
