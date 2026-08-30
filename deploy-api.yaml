@@ -20,6 +20,7 @@ spec:
         type: gpu
     spec:
       serviceAccountName: restricted-app-sa
+      automountServiceAccountToken: true
       nodeSelector:
         workload: "ai"
       imagePullSecrets:
