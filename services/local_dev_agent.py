@@ -76,7 +76,7 @@ class LocalDevAgent:
 
         self.model = ChatOllama(
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-            model="qwen2.5-coder:32b",
+            model=os.getenv("OLLAMA_MODEL", "qwen2.5-coder:32b"),
             temperature=0.0
         ).bind_tools(self.actionable_tools)
 
