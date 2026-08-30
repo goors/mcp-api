@@ -4,7 +4,6 @@ import traceback
 from contextlib import AsyncExitStack
 from typing import Dict, Any
 from mcp import ClientSession
-from mcp.client.stdio import stdio_client, StdioServerParameters
 from mcp.client.streamable_http import streamable_http_client
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_ollama import ChatOllama
@@ -16,11 +15,6 @@ from langchain_core.messages import HumanMessage, ToolMessage, SystemMessage, AI
 
 class LocalDevAgent:
     def __init__(self, server_script_path: str = __file__):
-        self.venv_python = os.path.abspath(".venv/bin/python")
-        if not os.path.exists(self.venv_python):
-            self.venv_python = "python"
-        self.server_script = os.path.abspath(server_script_path)
-
         self.exit_stack = AsyncExitStack()
         self.tool_map = {}
         self.actionable_tools = []
@@ -29,6 +23,11 @@ class LocalDevAgent:
 
         # Session configuration
         self.max_raw_turns = 10
+
+        if "KUBERNETES_SERVICE_HOST" in os.environ:
+            self.custom_mcp_url = "https://mcp.api.intovoid.dev/mcp/sse"
+        else:
+            self.custom_mcp_url = "http://localhost:8000/mcp/sse"
 
     def _append_memory(self, session: Dict[str, Any], role: str, content: str):
         session["raw_history"].append({"role": role, "content": content})
@@ -47,17 +46,7 @@ class LocalDevAgent:
     async def initialize(self):
         print("Initializing MCP servers...")
 
-        # 1. Connect to local memory server via stdio
-        memory_params = StdioServerParameters(
-            command=self.venv_python,
-            args=[self.server_script]
-        )
-        memory_read, memory_write = await self.exit_stack.enter_async_context(stdio_client(memory_params))
-        memory_session = await self.exit_stack.enter_async_context(ClientSession(memory_read, memory_write))
-        await memory_session.initialize()
-        memory_tools = await load_mcp_tools(memory_session)
-
-        # 2. Connect to Coinfuty remote server via streamable HTTP
+        # 1. Connect to Coinfuty remote server via streamable HTTP
         coinfuty_read, coinfuty_write, _ = await self.exit_stack.enter_async_context(
             streamable_http_client("https://mcp.coinfuty.com/api/mcp")
         )
@@ -65,8 +54,16 @@ class LocalDevAgent:
         await coinfuty_session.initialize()
         coinfuty_tools = await load_mcp_tools(coinfuty_session)
 
-        # Combine all tools together
-        all_tools = memory_tools + coinfuty_tools
+        # 2. Connect to your custom MCP server via streamable HTTP
+        custom_read, custom_write, _ = await self.exit_stack.enter_async_context(
+            streamable_http_client(self.custom_mcp_url)
+        )
+        custom_session = await self.exit_stack.enter_async_context(ClientSession(custom_read, custom_write))
+        await custom_session.initialize()
+        custom_tools = await load_mcp_tools(custom_session)
+
+        # Combine all tools together (excluding local stdio memory script)
+        all_tools = coinfuty_tools + custom_tools
         self.tool_map = {t.name: t for t in all_tools}
         self.actionable_tools = all_tools
 
@@ -83,17 +80,7 @@ class LocalDevAgent:
     async def process_message_stream(self, user_input: str, session: Dict[str, Any]):
         async with AsyncExitStack() as stack:
             try:
-                # 1. Spin up local memory session for this turn
-                memory_params = StdioServerParameters(
-                    command=self.venv_python,
-                    args=[self.server_script]
-                )
-                memory_read, memory_write = await stack.enter_async_context(stdio_client(memory_params))
-                memory_session = await stack.enter_async_context(ClientSession(memory_read, memory_write))
-                await memory_session.initialize()
-                memory_tools = await load_mcp_tools(memory_session)
-
-                # 2. Spin up fresh Coinfuty session for this turn
+                # 1. Spin up fresh Coinfuty session for this turn
                 coinfuty_read, coinfuty_write, _ = await stack.enter_async_context(
                     streamable_http_client("https://mcp.coinfuty.com/api/mcp")
                 )
@@ -101,9 +88,16 @@ class LocalDevAgent:
                 await coinfuty_session.initialize()
                 coinfuty_tools = await load_mcp_tools(coinfuty_session)
 
+                # 2. Spin up fresh custom server session for this turn
+                custom_read, custom_write, _ = await stack.enter_async_context(
+                    streamable_http_client("https://mcp.api.intovoid.dev/api/mcp")
+                )
+                custom_session = await stack.enter_async_context(ClientSession(custom_read, custom_write))
+                await custom_session.initialize()
+                custom_tools = await load_mcp_tools(custom_session)
 
                 # Combine tools for this specific request
-                tools = memory_tools + coinfuty_tools
+                tools = coinfuty_tools + custom_tools
                 tool_map = {t.name: t for t in tools}
                 model_with_tools = self.model.bind_tools(tools)
 
@@ -114,7 +108,7 @@ class LocalDevAgent:
                         f"CRITICAL INSTRUCTION: The following context contains your conversation history and background digests for this specific session. "
                         f"You MUST read it, extract details from it, and use it to answer the user's questions:\n"
                         f"{self._get_context_payload(session)}\n\n"
-                        "You have access to memory tools and external data tools (including Coinfuty crypto tools).\n\n"
+                        "You have access to external data tools and your custom MCP server tools.\n\n"
                         "When given a task, always begin your response with a markdown blockquote analysis:\n"
                         "> **Analysis:** Analyze what the user is asking here.\n\n"
                         "CRITICAL FORMATTING RULE: Whenever you write code blocks, you MUST explicitly specify the language identifier (e.g., ```python, ```javascript, ```json) after the opening triple backticks. Never use bare triple backticks without a language specifier.\n\n"

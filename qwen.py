@@ -16,7 +16,6 @@ USER_SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await agent.initialize()
     yield
     await agent.close()
 
