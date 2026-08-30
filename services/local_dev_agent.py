@@ -5,6 +5,7 @@ from contextlib import AsyncExitStack
 from typing import Dict, Any
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+from mcp.client.sse import sse_client
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage, ToolMessage, SystemMessage, AIMessage
@@ -28,6 +29,7 @@ class LocalDevAgent:
             self.custom_mcp_url = "https://mcp.api.intovoid.dev/mcp/sse"
         else:
             self.custom_mcp_url = "http://localhost:8000/mcp/sse"
+        print(self.custom_mcp_url)
 
     def _append_memory(self, session: Dict[str, Any], role: str, content: str):
         session["raw_history"].append({"role": role, "content": content})
@@ -54,15 +56,15 @@ class LocalDevAgent:
         await coinfuty_session.initialize()
         coinfuty_tools = await load_mcp_tools(coinfuty_session)
 
-        # 2. Connect to your custom MCP server via streamable HTTP
-        custom_read, custom_write, _ = await self.exit_stack.enter_async_context(
-            streamable_http_client(self.custom_mcp_url)
+        # 2. Connect to custom server via SSE
+        custom_read, custom_write = await self.exit_stack.enter_async_context(
+            sse_client(self.custom_mcp_url)
         )
         custom_session = await self.exit_stack.enter_async_context(ClientSession(custom_read, custom_write))
         await custom_session.initialize()
         custom_tools = await load_mcp_tools(custom_session)
 
-        # Combine all tools together (excluding local stdio memory script)
+        # Combine all tools together
         all_tools = coinfuty_tools + custom_tools
         self.tool_map = {t.name: t for t in all_tools}
         self.actionable_tools = all_tools
@@ -88,9 +90,9 @@ class LocalDevAgent:
                 await coinfuty_session.initialize()
                 coinfuty_tools = await load_mcp_tools(coinfuty_session)
 
-                # 2. Spin up fresh custom server session for this turn
-                custom_read, custom_write, _ = await stack.enter_async_context(
-                    streamable_http_client("https://mcp.api.intovoid.dev/mcp/sse")
+                # 2. Spin up fresh custom server session for this turn via SSE
+                custom_read, custom_write = await stack.enter_async_context(
+                    sse_client(self.custom_mcp_url)
                 )
                 custom_session = await stack.enter_async_context(ClientSession(custom_read, custom_write))
                 await custom_session.initialize()
@@ -99,7 +101,11 @@ class LocalDevAgent:
                 # Combine tools for this specific request
                 tools = coinfuty_tools + custom_tools
                 tool_map = {t.name: t for t in tools}
-                model_with_tools = self.model.bind_tools(tools)
+                model_with_tools = ChatOllama(
+                    base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+                    model=os.getenv("OLLAMA_MODEL", "qwen2.5-coder:32b"),
+                    temperature=0.0
+                ).bind_tools(tools)
 
                 system_msg = SystemMessage(
                     content=(
@@ -118,7 +124,6 @@ class LocalDevAgent:
 
                 messages = [system_msg, HumanMessage(content=user_input)]
 
-                # Stream the initial model response token-by-token
                 content_text = ""
                 tool_calls_to_process = []
 
@@ -129,7 +134,6 @@ class LocalDevAgent:
                     if hasattr(chunk, "tool_calls") and chunk.tool_calls:
                         tool_calls_to_process = chunk.tool_calls
 
-                # Fallback check if tool calls were passed as JSON text instead of native tool calls
                 if not tool_calls_to_process and content_text and '{"name":' in content_text:
                     try:
                         json_start = content_text.find('{"name":')
@@ -155,7 +159,6 @@ class LocalDevAgent:
                     except Exception:
                         pass
 
-                # Reconstruct the assistant message for the conversation history
                 assistant_msg = AIMessage(content=content_text, tool_calls=tool_calls_to_process)
                 messages.append(assistant_msg)
 
@@ -179,7 +182,6 @@ class LocalDevAgent:
 
                         messages.append(ToolMessage(content=result_str, tool_call_id=tool_call_id))
 
-                    # Stream the final response after tool execution token-by-token
                     final_answer = ""
                     async for chunk in model_with_tools.astream(messages):
                         if chunk.content:

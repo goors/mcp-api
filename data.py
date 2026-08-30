@@ -210,6 +210,6 @@ def run_docker_code(code: str, language: str = "node") -> dict:
                 )
             except Exception:
                 pass
-
-if __name__ == "__main__":
-    mcp.run()
+#
+# if __name__ == "__main__":
+#     mcp.run()
