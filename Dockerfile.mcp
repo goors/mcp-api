@@ -22,4 +22,4 @@ RUN pip install --no-cache-dir -r requirements.mcp.txt
 EXPOSE 8001
 
 # Ensure the app finds the binary in /app/yt-dlp
-CMD ["pythion", "data.py"]
+CMD ["python", "data.py"]
