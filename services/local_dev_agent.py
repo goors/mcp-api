@@ -110,7 +110,6 @@ class LocalDevAgent:
                 system_msg = SystemMessage(
                     content=(
                         f"You are a helpful local assistant built for the user.\n"
-                        f"Author Profile & Background:\n{json.dumps(self.profile_data, indent=2)}\n\n"
                         f"CRITICAL INSTRUCTION: The following context contains your conversation history and background digests for this specific session. "
                         f"You MUST read it, extract details from it, and use it to answer the user's questions:\n"
                         f"{self._get_context_payload(session)}\n\n"

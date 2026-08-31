@@ -25,7 +25,7 @@ except Exception:
 
 @mcp.tool()
 def about_author() -> dict:
-    """Returns background details, role, and preferences of the user operating this system."""
+    """Retrieve personal biography, technical stack, and background profile of the system owner. ONLY call this when the user explicitly asks about the author's background, bio, tech stack, or personal details. Never use for general programming questions."""
     return {
         "name": "Nikola Derikonjić",
         "age": 46,
@@ -50,11 +50,12 @@ def about_author() -> dict:
 
 @mcp.tool()
 def today() -> str:
+    """Returns the current date and time. ONLY call this when the user explicitly asks for the exact current date or time."""
     return str(datetime.datetime.now())
 
 @mcp.tool()
 def call_weather_api(lat: float, lon: float) -> dict:
-    """Fetches weather forecast from MET Norway locationforecast API and returns only the current/first record."""
+    """Fetches real-time weather forecasts for specific geographic coordinates. ONLY call this when the user explicitly asks about weather conditions for a location."""
     url = f"https://api.met.no/weatherapi/locationforecast/2.0/compact?lat={lat}&lon={lon}"
     headers = {"User-Agent": "LocalDevAgent/1.0 (nikola@insightfulstays.com)"}
     response = requests.get(url, headers=headers, timeout=10.0)
@@ -73,7 +74,7 @@ def call_weather_api(lat: float, lon: float) -> dict:
 
 @mcp.tool()
 def count_tokens(text: str) -> dict:
-    """Calculates an exact token count for the provided text using standard estimation or word heuristics."""
+    """Calculates an exact token count for a provided block of text. ONLY call this when the user explicitly asks to count tokens in a specific string."""
     if not text:
         return {"characters": 0, "words": 0, "estimated_tokens": 0}
 
@@ -89,8 +90,8 @@ def count_tokens(text: str) -> dict:
     }
 
 @mcp.tool()
-def run_docker_code(code: str, language: str = "node") -> dict:
-    """Executes code inside a hardened, sandboxed Kubernetes Pod and returns stdout/stderr."""
+def run__code(code: str, language: str = "node") -> dict:
+    """Executes arbitrary Node.js or Python code inside a sandboxed Kubernetes pod. ONLY call this when the user explicitly asks you to run, execute, or test code snippets. Never use this for explaining code or answering conceptual programming questions."""
     pod_name = None
     namespace = os.getenv("KUBERNETES_NAMESPACE", "code-runner-env")
 
