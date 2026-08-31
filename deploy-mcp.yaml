@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp
+  namespace: code-runner-env
+  labels:
+    app: mcp
+    component: api
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: mcp
+      component: api
+  template:
+    metadata:
+      labels:
+        app: mcp
+        component: api
+        type: gpu
+    spec:
+      serviceAccountName: restricted-app-sa
+      automountServiceAccountToken: true
+      nodeSelector:
+        worker-node: "true"
+      imagePullSecrets:
+        - name: ghsec
+      containers:
+        - name: app
+          image: "pregmatch/shiny-flake:mcp-${IMAGE_TAG}"
+          ports:
+            - containerPort: 8001
+---
+# 2. API SERVICE
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-service
+  namespace: code-runner-env
+spec:
+  selector:
+    app: mcp
+    component: api
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8001
+---
+# 3. API INGRESS
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mcp
+  namespace: code-runner-env
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/buffering: "false"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - mcp-service.intovoid.dev
+      secretName: mcp-service-intovoid-dev-tls
+  rules:
+    - host: mcp-service.intovoid.dev
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mcp-service
+                port:
+                  number: 8001

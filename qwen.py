@@ -7,7 +7,6 @@ import json
 from typing import Dict, Any, List, Optional
 
 from services.local_dev_agent import LocalDevAgent
-from data import mcp  # Import your mcp instance from data1.py
 
 agent = LocalDevAgent("data.py")
 
@@ -16,6 +15,7 @@ USER_SESSIONS: Dict[str, Dict[str, Any]] = {}
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    await agent.initialize()
     yield
     await agent.close()
 
@@ -23,7 +23,6 @@ app = FastAPI(title="Qwen Coder Local API with MCP", lifespan=lifespan)
 
 # Mount the FastMCP ASGI application directly onto your FastAPI router
 # This exposes the MCP endpoints (like /mcp or SSE transport) under the /mcp prefix
-app.mount("/mcp", mcp.sse_app())
 
 # Add CORS middleware to accept preflight OPTIONS requests from your frontend
 app.add_middleware(

@@ -211,6 +211,8 @@ def run__code(code: str, language: str = "node") -> dict:
                 )
             except Exception:
                 pass
-#
-# if __name__ == "__main__":
-#     mcp.run()
+mcp.settings.host = "0.0.0.0"
+mcp.settings.port = 8001
+
+if __name__ == "__main__":
+    mcp.run(transport="sse")
