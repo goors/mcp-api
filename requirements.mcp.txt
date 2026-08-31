@@ -1,4 +1,0 @@
-requests==2.31.0
-# MCP Server dependencies
-mcp>=1.2.0
-kubernetes>=36.0.3
