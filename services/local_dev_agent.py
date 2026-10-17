@@ -66,11 +66,19 @@ class LocalDevAgent:
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
             model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b"),
             temperature=0.0,
+            reasoning=False,
+
+        ).bind_tools(self.actionable_tools)
+
+        self.model_reasoning = ChatOllama(
+            base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+            model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b"),
+            temperature=0.0,
             reasoning=True,
 
         ).bind_tools(self.actionable_tools)
 
-    async def process_message_stream(self, user_input: str, session: Dict[str, Any]):
+    async def process_message_stream(self, user_input: str, session: Dict[str, Any], deep_think: bool = False):
         try:
             system_msg = SystemMessage(
                 content=(
@@ -87,7 +95,7 @@ class LocalDevAgent:
                 content_text = ""
                 tool_calls = []
                 thinking_started = False
-                async for chunk in self.model.astream(messages):
+                async for chunk in self.model_reasoning.astream(messages) if deep_think else self.model.astream(messages):
                     ak = getattr(chunk, "additional_kwargs", None) or {}
                     thinking = ak.get("reasoning_content")
                     if thinking:

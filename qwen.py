@@ -43,6 +43,7 @@ class MessageItem(BaseModel):
 class QueryRequest(BaseModel):
     user_id: str
     prompt: str
+    deepThink: bool
     history: Optional[List[MessageItem]] = None
 
 @app.post("/ask")
@@ -55,7 +56,6 @@ async def ask_qwen(body: QueryRequest):
             "raw_history": [],
             "summary_digest": ""
         }
-
         if body.history:
             for msg in body.history:
                 if msg.role == "user" and msg.content == body.prompt:
@@ -69,7 +69,9 @@ async def ask_qwen(body: QueryRequest):
 
     async def event_generator():
         try:
-            async for chunk in agent.process_message_stream(body.prompt, user_session):
+            async for chunk in agent.process_message_stream(
+                    body.prompt, user_session, deep_think=body.deepThink
+            ):
                 yield f"data: {json.dumps({'content': chunk})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
