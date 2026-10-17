@@ -211,6 +211,43 @@ def run__code(code: str, language: str = "node") -> dict:
                 )
             except Exception:
                 pass
+@mcp.tool()
+def http_request(url: str, method: str = "GET", headers: str = "{}",
+                 body: str = "", timeout_s: int = 15) -> dict:
+    """Perform an HTTP request and return status, headers, and body. ONLY call this when the user explicitly asks to fetch or hit a URL. Blocks private/internal addresses."""
+    import json, ipaddress
+    from urllib.parse import urlparse
+
+    # SSRF guard: reject private/loopback/link-local targets
+    host = urlparse(url).hostname or ""
+    try:
+        addr = ipaddress.ip_address(host)
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+            return {"error": f"Refusing to request internal address: {host}"}
+    except ValueError:
+        if host in ("localhost",) or host.endswith(".local") or host.endswith(".internal"):
+            return {"error": f"Refusing to request internal hostname: {host}"}
+
+    try:
+        hdrs = json.loads(headers) if headers else {}
+    except json.JSONDecodeError:
+        return {"error": "Headers must be valid JSON"}
+
+    try:
+        resp = requests.request(
+            method.upper(), url, headers=hdrs,
+            data=body.encode() if body else None,
+            timeout=min(timeout_s, 30), allow_redirects=False,
+        )
+        return {
+            "status": resp.status_code,
+            "headers": dict(resp.headers),
+            "body": resp.text[:20000],  # truncate
+            "truncated": len(resp.text) > 20000,
+        }
+    except requests.RequestException as e:
+        return {"error": str(e)}
+
 mcp.settings.host = "0.0.0.0"
 mcp.settings.port = 8001
 

@@ -18,10 +18,8 @@ class LocalDevAgent:
         self.profile_data = {}
         self.max_raw_turns = 10
 
-        if "KUBERNETES_SERVICE_HOST" in os.environ:
-            self.custom_mcp_url = "https://mcp-service.intovoid.dev/sse"
-        else:
-            self.custom_mcp_url = "http://localhost:8001/sse"
+        # Use production URL
+        self.custom_mcp_url = "https://mcp-service.intovoid.dev/sse"
 
     def _append_memory(self, session: Dict[str, Any], role: str, content: str):
         session["raw_history"].append({"role": role, "content": content})
@@ -40,11 +38,8 @@ class LocalDevAgent:
     async def initialize(self):
         print("Initializing persistent MCP sessions...")
 
-        # 1. Connect to Custom SSE MCP server safely
-        # Connect to Custom SSE MCP server safely with individual try/except
         try:
             custom_read, custom_write = await self.exit_stack.enter_async_context(
-                # Remove client=http_client here
                 sse_client(self.custom_mcp_url)
             )
             custom_session = await self.exit_stack.enter_async_context(ClientSession(custom_read, custom_write))
@@ -52,6 +47,7 @@ class LocalDevAgent:
             custom_tools = await load_mcp_tools(custom_session)
             self.actionable_tools.extend(custom_tools)
             print(f"Successfully connected to Custom SSE MCP at {self.custom_mcp_url}.")
+            print(f"Loaded tools: {[t.name for t in self.actionable_tools]}")
         except Exception as e:
             print(f"Warning: Could not connect to Custom SSE MCP server ({self.custom_mcp_url}): {e}")
 
@@ -63,11 +59,10 @@ class LocalDevAgent:
             except Exception:
                 pass
 
-
-        # Bind tools once to the persistent model instance
+        # Bind tools to the model
         self.model = ChatOllama(
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-            model=os.getenv("OLLAMA_MODEL", "qwen2.5-coder:7b"),
+            model=os.getenv("OLLAMA_MODEL", "llama3.2:3b"),
             temperature=0.0
         ).bind_tools(self.actionable_tools)
 
@@ -80,9 +75,10 @@ class LocalDevAgent:
                     f"You MUST read it, extract details from it, and use it to answer the user's questions:\n"
                     f"{self._get_context_payload(session)}\n\n"
                     "You have access to external data tools and your custom MCP server tools.\n\n"
+                    "CRITICAL TOOL RULE: If the user asks for real-time data (weather, date, time, server status), "
+                    "you MUST call the appropriate tool immediately. Do NOT output JSON text. Do NOT tell the user to check a website. Trigger the tool.\n\n"
                     "When given a task, always begin your response with a markdown blockquote analysis:\n"
                     "> **Analysis:** Analyze what the user is asking here.\n\n"
-                    "CRITICAL FORMATTING RULE: Whenever you write code blocks, you MUST explicitly specify the language identifier after the opening triple backticks. Never use bare triple backticks.\n\n"
                     "After the blockquote analysis, provide your actual response or trigger the required tool call."
                 )
             )
@@ -91,7 +87,7 @@ class LocalDevAgent:
             content_text = ""
             tool_calls_to_process = []
 
-            # Use the pre-initialized persistent model instance
+            # Stream the initial model response
             async for chunk in self.model.astream(messages):
                 if chunk.content:
                     content_text += chunk.content
@@ -99,6 +95,7 @@ class LocalDevAgent:
                 if hasattr(chunk, "tool_calls") and chunk.tool_calls:
                     tool_calls_to_process = chunk.tool_calls
 
+            # Fallback: Parse JSON if the model outputted it as text
             if not tool_calls_to_process and content_text and '{"name":' in content_text:
                 try:
                     json_start = content_text.find('{"name":')
@@ -116,20 +113,23 @@ class LocalDevAgent:
                     if json_end > 0:
                         parsed_tool = json.loads(json_substr[:json_end])
                         if "name" in parsed_tool:
+                            # Capture "parameters", "arguments", or "args"
+                            args = parsed_tool.get("parameters") or parsed_tool.get("arguments") or parsed_tool.get("args") or {}
                             tool_calls_to_process = [{
                                 "name": parsed_tool["name"],
-                                "args": parsed_tool.get("arguments", {}),
+                                "args": args,
                                 "id": "fallback_call_1"
                             }]
                 except Exception:
                     pass
 
-            assistant_msg = AIMessage(content=content_text, tool_calls=tool_calls_to_process)
-            messages.append(assistant_msg)
-            final_answer = content_text
-
+            # If the model successfully called tools (or the fallback caught it)
             if tool_calls_to_process:
+                assistant_msg = AIMessage(content=content_text, tool_calls=tool_calls_to_process)
+                messages.append(assistant_msg)
+
                 yield "\n\n> *Executing tool calls...*\n\n"
+
                 for tool_call in tool_calls_to_process:
                     tool_name = tool_call["name"]
                     tool_args = tool_call.get("args", {})
@@ -137,6 +137,10 @@ class LocalDevAgent:
 
                     if tool_name in self.tool_map:
                         try:
+                            # Ensure args are a dict
+                            if isinstance(tool_args, str):
+                                tool_args = json.loads(tool_args)
+
                             result = await self.tool_map[tool_name].ainvoke(tool_args)
                             result_str = json.dumps(result, ensure_ascii=False, indent=2)
                         except Exception as e:
@@ -145,15 +149,22 @@ class LocalDevAgent:
                         result_str = f"Unknown tool: {tool_name}"
 
                     messages.append(ToolMessage(content=result_str, tool_call_id=tool_call_id))
+                    yield f"\n\n> **Tool Result:**\n> {result_str}\n\n"
 
+                # Ask model for the final answer based on the tool result
                 final_answer = ""
                 async for chunk in self.model.astream(messages):
                     if chunk.content:
                         final_answer += chunk.content
                         yield chunk.content
 
-            self._append_memory(session, "human", user_input)
-            self._append_memory(session, "ai", final_answer)
+                self._append_memory(session, "human", user_input)
+                self._append_memory(session, "ai", final_answer)
+
+            else:
+                # No tools were called, just save the text response
+                self._append_memory(session, "human", user_input)
+                self._append_memory(session, "ai", content_text)
 
         except Exception as e:
             yield f"\n\n> **Error:** {type(e).__name__} – {str(e)}"
