@@ -21,10 +21,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Qwen Coder Local API with MCP", lifespan=lifespan)
 
-# Mount the FastMCP ASGI application directly onto your FastAPI router
-# This exposes the MCP endpoints (like /mcp or SSE transport) under the /mcp prefix
-
-# Add CORS middleware to accept preflight OPTIONS requests from your frontend
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -39,11 +35,13 @@ app.add_middleware(
 class MessageItem(BaseModel):
     role: str
     content: str
+    tags: Optional[List[str]] = None
 
 class QueryRequest(BaseModel):
     user_id: str
     prompt: str
     deepThink: bool
+    tags: Optional[List[str]] = None
     history: Optional[List[MessageItem]] = None
 
 @app.post("/ask")
@@ -62,15 +60,29 @@ async def ask_qwen(body: QueryRequest):
                     continue
                 USER_SESSIONS[body.user_id]["raw_history"].append({
                     "role": msg.role,
-                    "content": msg.content
+                    "content": msg.content,
+                    "tags": msg.tags or ["general"],
                 })
 
     user_session = USER_SESSIONS[body.user_id]
 
+    active_tags = set(body.tags or ["general"])
+    filtered_history = [
+        rec for rec in user_session["raw_history"]
+        if set(rec.get("tags") or ["general"]) & active_tags
+    ]
+
+    user_session_for_request = {
+        "raw_history": filtered_history,
+        "summary_digest": user_session["summary_digest"],
+        "all_history": user_session["raw_history"],
+        "tags": body.tags or ["general"],
+    }
+
     async def event_generator():
         try:
             async for chunk in agent.process_message_stream(
-                    body.prompt, user_session, deep_think=body.deepThink
+                    body.prompt, user_session_for_request, deep_think=body.deepThink
             ):
                 yield f"data: {json.dumps({'content': chunk})}\n\n"
         except Exception as e:
@@ -80,5 +92,4 @@ async def ask_qwen(body: QueryRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    # Bind to 0.0.0.0 so Kubernetes Ingress and internal services can reach it across the container network
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
