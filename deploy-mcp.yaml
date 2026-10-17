@@ -45,7 +45,7 @@ spec:
     component: api
   ports:
     - protocol: TCP
-      port: 8000
+      port: 8001
       targetPort: 8001
 ---
 # 3. API INGRESS
@@ -59,6 +59,7 @@ metadata:
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
     traefik.ingress.kubernetes.io/buffering: "false"
+    traefik.ingress.kubernetes.io/router.middlewares: code-runner-env-cors-headers@kubernetescrd
 spec:
   ingressClassName: traefik
   tls:
