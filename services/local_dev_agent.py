@@ -86,7 +86,7 @@ class LocalDevAgent:
             for _ in range(self.max_tool_rounds):
                 content_text = ""
                 tool_calls = []
-
+                thinking_started = False
                 async for chunk in self.model.astream(messages):
                     ak = getattr(chunk, "additional_kwargs", None) or {}
                     thinking = ak.get("reasoning_content")
