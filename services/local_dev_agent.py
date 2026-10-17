@@ -92,9 +92,10 @@ class LocalDevAgent:
                     thinking = ak.get("reasoning_content")
                     if thinking:
                         if not thinking_started:
-                            yield "\n\n> **[thinking]** "
+                            yield "\n\n> **[thinking]**\n> "
                             thinking_started = True
-                        yield thinking
+                        # re-prefix every newline so each line stays inside the blockquote
+                        yield thinking.replace("\n", "\n> ")
                     elif thinking_started:
                         yield "\n\n"
                         thinking_started = False
