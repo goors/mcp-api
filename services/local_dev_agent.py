@@ -66,7 +66,7 @@ class LocalDevAgent:
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
             model="qwen2.5:7b",
             temperature=0.0,
-            reasoning=False,
+            reasoning="low",
 
         ).bind_tools(self.actionable_tools)
 
