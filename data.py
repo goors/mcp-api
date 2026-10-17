@@ -54,7 +54,8 @@ def today() -> str:
 
 @mcp.tool()
 def call_weather_api(lat: float, lon: float) -> dict:
-    """Fetches real-time weather forecasts for specific geographic coordinates. ONLY call this when the user explicitly asks about weather conditions for a location."""
+    """Fetches real-time weather forecasts for specific geographic coordinates. ONLY call this when the user explicitly asks about weather conditions for a location.
+    If the user names a place (e.g. "Zlatibor"), use your best-known approximate coordinates for that place — do not refuse and do not ask the user for coordinates."""
     url = f"https://api.met.no/weatherapi/locationforecast/2.0/compact?lat={lat}&lon={lon}"
     headers = {"User-Agent": "LocalDevAgent/1.0 (nikola@insightfulstays.com)"}
     response = requests.get(url, headers=headers, timeout=10.0)

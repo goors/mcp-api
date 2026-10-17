@@ -66,7 +66,8 @@ class LocalDevAgent:
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
             model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b"),
             temperature=0.0,
-            reasoning=True
+            reasoning=True,
+
         ).bind_tools(self.actionable_tools)
 
     async def process_message_stream(self, user_input: str, session: Dict[str, Any]):
@@ -90,7 +91,13 @@ class LocalDevAgent:
                     ak = getattr(chunk, "additional_kwargs", None) or {}
                     thinking = ak.get("reasoning_content")
                     if thinking:
-                        yield f"[thinking] {thinking}"
+                        if not thinking_started:
+                            yield "\n\n> **[thinking]** "
+                            thinking_started = True
+                        yield thinking
+                    elif thinking_started:
+                        yield "\n\n"
+                        thinking_started = False
 
                     if chunk.content:
                         content_text += chunk.content
