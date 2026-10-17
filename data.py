@@ -2,12 +2,11 @@ import datetime
 import time
 import uuid
 from mcp.server.transport_security import TransportSecuritySettings
-from mcp.server.fastmcp import FastMCP
+#from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
+from fastmcp.apps import AppConfig, ResourceCSP
 import requests
-mcp = FastMCP("Elasticsearch Address Processor",
-              transport_security=TransportSecuritySettings(
-                  enable_dns_rebinding_protection=False
-              )
+mcp = FastMCP("Elasticsearch Address Processor"
             )
 from kubernetes import client, config
 from kubernetes.client.rest import ApiException
@@ -211,22 +210,85 @@ def run__code(code: str, language: str = "node") -> dict:
                 )
             except Exception:
                 pass
-@mcp.tool()
-def http_request(url: str, method: str = "GET", headers: str = "{}",
-                 body: str = "", timeout_s: int = 15) -> dict:
-    """Perform an HTTP request and return status, headers, and body. ONLY call this when the user explicitly asks to fetch or hit a URL. Blocks private/internal addresses."""
-    import json, ipaddress
-    from urllib.parse import urlparse
+import ipaddress
+import json
+import socket
+from urllib.parse import urlparse
 
-    # SSRF guard: reject private/loopback/link-local targets
-    host = urlparse(url).hostname or ""
+import requests
+import trafilatura
+from bs4 import BeautifulSoup
+
+ALLOWED_SCHEMES = {"http", "https"}
+BLOCKED_HOSTNAMES = {"localhost", "metadata.google.internal"}
+
+
+def _resolve_and_check(host: str) -> str | None:
+    """Resolve host, return None if any resolved IP is internal, else return the IP."""
+    if not host:
+        return None
+    if host in BLOCKED_HOSTNAMES or host.endswith((".local", ".internal", ".localhost")):
+        return None
     try:
-        addr = ipaddress.ip_address(host)
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-            return {"error": f"Refusing to request internal address: {host}"}
-    except ValueError:
-        if host in ("localhost",) or host.endswith(".local") or host.endswith(".internal"):
-            return {"error": f"Refusing to request internal hostname: {host}"}
+        # getaddrinfo returns every A/AAAA record
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return None
+    for info in infos:
+        ip_str = info[4][0]
+        # strip IPv6 scope id like 'fe80::1%eth0'
+        ip_str = ip_str.split("%", 1)[0]
+        try:
+            addr = ipaddress.ip_address(ip_str)
+        except ValueError:
+            return None
+        if (addr.is_private or addr.is_loopback or addr.is_link_local
+                or addr.is_reserved or addr.is_multicast or addr.is_unspecified):
+            return None
+    return infos[0][4][0]
+
+
+def _html_to_text(html: str, url: str) -> str:
+    """Extract main readable text from HTML. Returns '' if extraction fails."""
+    # trafilatura is the best signal-to-noise extractor for articles/pages
+    extracted = trafilatura.extract(
+        html,
+        url=url,
+        include_comments=False,
+        include_tables=True,
+        favor_precision=True,     # stricter, drops boilerplate
+        deduplicate=True,
+    )
+    if extracted and extracted.strip():
+        return extracted.strip()
+
+    # Fallback: strip tags and collapse whitespace
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style", "noscript", "template", "svg", "iframe"]):
+        tag.decompose()
+    text = soup.get_text(separator="\n")
+    lines = (line.strip() for line in text.splitlines())
+    return "\n".join(line for line in lines if line)
+
+
+@mcp.tool(
+)
+def http_request(
+        url: str,
+        method: str = "GET",
+        headers: str = "{}",
+        body: str = "",
+        timeout_s: int = 15,
+        mode: str = "text",   # "text" | "raw"
+) -> dict:
+    """Fetch a URL and return readable text (default) or raw body.
+    Blocks private/internal addresses and non-http(s) schemes."""
+    parsed = urlparse(url)
+    if parsed.scheme not in ALLOWED_SCHEMES:
+        return {"error": f"Unsupported scheme: {parsed.scheme or '(none)'}"}
+
+    if _resolve_and_check(parsed.hostname or "") is None:
+        return {"error": f"Refusing to request internal or unresolvable host: {parsed.hostname}"}
 
     try:
         hdrs = json.loads(headers) if headers else {}
@@ -235,21 +297,55 @@ def http_request(url: str, method: str = "GET", headers: str = "{}",
 
     try:
         resp = requests.request(
-            method.upper(), url, headers=hdrs,
+            method.upper(),
+            url,
+            headers=hdrs,
             data=body.encode() if body else None,
-            timeout=min(timeout_s, 30), allow_redirects=False,
+            timeout=min(timeout_s, 30),
+            allow_redirects=False,  # keep this — redirects are a common SSRF pivot
+            # Cap download so a 5GB response can't OOM you
+            stream=True,
         )
-        return {
-            "status": resp.status_code,
-            "headers": dict(resp.headers),
-            "body": resp.text[:20000],  # truncate
-            "truncated": len(resp.text) > 20000,
-        }
     except requests.RequestException as e:
         return {"error": str(e)}
 
-mcp.settings.host = "0.0.0.0"
-mcp.settings.port = 8001
+    # Read at most ~2MB, then stop
+    max_bytes = 2 * 1024 * 1024
+    chunks, total = [], 0
+    for chunk in resp.iter_content(chunk_size=8192):
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > max_bytes:
+            break
+    raw = b"".join(chunks)
+    if total > max_bytes:
+        raw = raw[:max_bytes]
+
+    # Decode with the charset the server declared, else utf-8
+    encoding = resp.encoding or "utf-8"
+    try:
+        text = raw.decode(encoding, errors="replace")
+    except LookupError:
+        text = raw.decode("utf-8", errors="replace")
+
+    if mode == "raw":
+        out = text
+    else:
+        ctype = resp.headers.get("Content-Type", "").lower()
+        if "html" in ctype or text.lstrip().startswith(("<", "<!doctype", "<!DOCTYPE")):
+            out = _html_to_text(text, url)
+        else:
+            out = text  # JSON, plain text, XML — return as-is
+
+    return {
+        "status": resp.status_code,
+        "headers": dict(resp.headers),
+        "text": out,
+        "bytes_read": total
+    }
+
+# mcp.settings.host = "0.0.0.0"
+# mcp.settings.port = 8001
 
 if __name__ == "__main__":
-    mcp.run(transport="sse")
+    mcp.run(transport="sse", host="0.0.0.0", port=8001)
