@@ -27,7 +27,10 @@ app = FastAPI(title="Qwen Coder Local API with MCP", lifespan=lifespan)
 # Add CORS middleware to accept preflight OPTIONS requests from your frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:5173",
+        "https://mcp.intovoid.dev/"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
