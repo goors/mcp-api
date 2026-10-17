@@ -65,25 +65,17 @@ class LocalDevAgent:
         self.model = ChatOllama(
             base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
             model=os.getenv("OLLAMA_MODEL", "qwen2.5:7b"),
-            temperature=0.0
+            temperature=0.0,
+            reasoning=True
         ).bind_tools(self.actionable_tools)
 
     async def process_message_stream(self, user_input: str, session: Dict[str, Any]):
         try:
             system_msg = SystemMessage(
                 content=(
-                    f"You are a helpful local assistant built for the user.\n\n"
-                    f"CRITICAL INSTRUCTION: The following context contains your conversation history and background digests for this specific session. "
-                    f"You MUST read it, extract details from it, and use it to answer the user's questions:\n"
+                    f"Conversation history for this session:\n"
                     f"{self._get_context_payload(session)}\n\n"
-                    "When given a task, always begin your response with a markdown blockquote analysis:\n"
-                    "> **Analysis:** Analyze what the user is asking here.\n\n"
                     "CRITICAL FORMATTING RULE: Whenever you write code blocks, you MUST explicitly specify the language identifier after the opening triple backticks. Never use bare triple backticks.\n\n"
-                    "After the blockquote analysis, provide your actual response or trigger the required tool call.\n\n"
-                    "TOOL RULES:\n"
-                    "- Call tools through the tool-calling interface. Do not write tool calls as JSON text.\n"
-                    "- If a task needs multiple steps, call one tool at a time, read the result, then call the next tool until the task is done.\n"
-                    "- Never claim a result you did not receive from a tool."
                 )
             )
 
@@ -95,9 +87,15 @@ class LocalDevAgent:
                 tool_calls = []
 
                 async for chunk in self.model.astream(messages):
+                    ak = getattr(chunk, "additional_kwargs", None) or {}
+                    thinking = ak.get("reasoning_content")
+                    if thinking:
+                        yield f"[thinking] {thinking}"
+
                     if chunk.content:
                         content_text += chunk.content
                         yield chunk.content
+
                     if getattr(chunk, "tool_calls", None):
                         tool_calls.extend(chunk.tool_calls)
 
